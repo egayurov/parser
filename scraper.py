@@ -6,6 +6,12 @@ from playwright.sync_api import sync_playwright, TimeoutError as PlaywrightTimeo
 
 # ================= КОНФИГУРАЦИЯ =================
 N8N_WEBHOOK_URL = "https://n8n-lolcfinance-n8n.ov4co6.easypanel.host/webhook-test/somon-parser"
+
+# Настройки бесплатного ScraperAPI
+PROXY_SERVER = "http://proxy-server.scraperapi.com:8001" 
+PROXY_USERNAME = "scraperapi"
+PROXY_PASSWORD = "7bcaf0b4733c9417fab59fbe5fa8e711"
+
 BASE_URL = "https://somon.tj"
 TARGET_URL = "https://somon.tj/nedvuzhimost/kvartiry/"
 # =================================================

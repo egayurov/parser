@@ -13,7 +13,7 @@ PROXY_USERNAME = "scraperapi.premium=true.country_code=ru"
 PROXY_PASSWORD = "7bcaf0b4733c9417fab59fbe5fa8e711"
 
 BASE_URL = "https://somon.tj"
-TARGET_URL = "https://somon.tj/nedvuzhimost/kvartiry/"
+TARGET_URL = "https://somon.tj/nedvizhimost/prodazha-kvartir/"
 # =================================================
 
 def random_delay(min_sec=3.0, max_sec=6.0):

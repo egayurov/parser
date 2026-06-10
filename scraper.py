@@ -5,10 +5,8 @@ import requests
 from playwright.sync_api import sync_playwright, TimeoutError as PlaywrightTimeout
 
 # ================= КОНФИГУРАЦИЯ =================
-# БОЕВОЙ URL (без слова test)
 N8N_WEBHOOK_URL = "https://n8n-lolcfinance-n8n.ov4co6.easypanel.host/webhook/somon-parser"
 
-# ПРЕМИУМ ПРОКСИ ScraperAPI (Россия)
 PROXY_SERVER = "http://proxy-server.scraperapi.com:8001" 
 PROXY_USERNAME = "scraperapi"
 PROXY_PASSWORD = "7bcaf0b4733c9417fab59fbe5fa8e711"
@@ -47,19 +45,33 @@ def main():
             user_agent="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36"
         )
         
-        # ВОТ ЭТА СТРОЧКА ВЕРНУЛАСЬ НА МЕСТО:
         page = context.new_page()
 
         print(f"[*] Открываем раздел продажа квартир...")
-        try:
-            page.goto(TARGET_URL, timeout=60000)
-            page.wait_for_load_state('domcontentloaded')
-            time.sleep(5)
-            print(f"[*] ЗАГОЛОВОК: {page.title()}")
-        except Exception as e:
-            print(f"[!] Ошибка: {e}")
+        
+        # --- УМНАЯ СИСТЕМА ЗАГРУЗКИ (3 ПОПЫТКИ) ---
+        max_retries = 3
+        page_loaded = False
+        
+        for attempt in range(max_retries):
+            print(f"[*] Попытка загрузки {attempt + 1} из {max_retries}...")
+            try:
+                # Даем целых 120 секунд (2 минуты) на пробитие Cloudflare
+                page.goto(TARGET_URL, timeout=120000)
+                # Ждем, пока на странице появится хотя бы одна ссылка на объявление
+                page.wait_for_selector('a[href*="/adv/"]', timeout=30000)
+                print(f"[*] УСПЕХ! ЗАГОЛОВОК: {page.title()}")
+                page_loaded = True
+                break # Выходим из цикла попыток, если всё ок
+            except Exception as e:
+                print(f"[!] Ошибка на попытке {attempt + 1}: {e}")
+                time.sleep(5) # Пауза перед новой попыткой
+                
+        if not page_loaded:
+            print("[-] Сайт так и не загрузился после 3 попыток. Завершаем работу.")
             browser.close()
             return
+        # ------------------------------------------
 
         print("[*] Собираем ссылки...")
         links_locators = page.locator('a[href*="/adv/"]').all()
@@ -71,7 +83,7 @@ def main():
                 full_url = BASE_URL + href if href.startswith('/') else href
                 ad_urls.add(full_url)
 
-        # Берем 5 квартир для проверки полной логики
+        # Берем 5 квартир
         ad_urls = list(ad_urls)[:5] 
         print(f"[*] Найдено квартир для глубокого парсинга: {len(ad_urls)}")
 
@@ -79,9 +91,11 @@ def main():
             print(f"\n[{idx}/{len(ad_urls)}] Заходим: {url}")
             
             try:
-                page.goto(url, timeout=45000)
-                page.wait_for_load_state('domcontentloaded')
-            except:
+                # Даем 90 секунд на загрузку самой квартиры
+                page.goto(url, timeout=90000)
+                page.wait_for_selector('h1', timeout=20000) # Ждем появления заголовка H1
+            except Exception as e:
+                print(f"   [!] Не смогли загрузить страницу квартиры: {e}")
                 continue
 
             item_data = {

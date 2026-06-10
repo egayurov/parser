@@ -10,7 +10,7 @@ N8N_WEBHOOK_URL = "https://n8n-lolcfinance-n8n.ov4co6.easypanel.host/webhook/som
 
 # ПРЕМИУМ ПРОКСИ ScraperAPI (Россия)
 PROXY_SERVER = "http://proxy-server.scraperapi.com:8001" 
-PROXY_USERNAME = "scraperapi.premium=true.country_code=ru"
+PROXY_USERNAME = "scraperapi"
 PROXY_PASSWORD = "7bcaf0b4733c9417fab59fbe5fa8e711"
 
 BASE_URL = "https://somon.tj"

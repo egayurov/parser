@@ -42,10 +42,13 @@ def main():
         browser = p.chromium.launch(headless=True)
         context = browser.new_context(
             proxy=proxy_settings,
-            ignore_https_errors=True,  # <--- ВОТ ЭТА ВОЛШЕБНАЯ СТРОЧКА
+            ignore_https_errors=True,
             viewport={'width': 1920, 'height': 1080},
             user_agent="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36"
         )
+        
+        # ВОТ ЭТА СТРОЧКА ВЕРНУЛАСЬ НА МЕСТО:
+        page = context.new_page()
 
         print(f"[*] Открываем раздел продажа квартир...")
         try:

@@ -7,9 +7,9 @@ from playwright.sync_api import sync_playwright, TimeoutError as PlaywrightTimeo
 # ================= КОНФИГУРАЦИЯ =================
 N8N_WEBHOOK_URL = "https://n8n-lolcfinance-n8n.ov4co6.easypanel.host/webhook/somon-parser"
 
-# Добавили session_number=12345 чтобы не менять IP и не решать капчу заново для каждой квартиры!
+# ScraperAPI с липкой сессией (чтобы не решать капчу для каждой квартиры)
 PROXY_SERVER = "http://proxy-server.scraperapi.com:8001" 
-PROXY_USERNAME = "scraperapi.premium=true.session_number=12345" 
+PROXY_USERNAME = "scraperapi.premium=true.session_number=77777" 
 PROXY_PASSWORD = "7bcaf0b4733c9417fab59fbe5fa8e711"
 
 BASE_URL = "https://somon.tj"
@@ -56,18 +56,18 @@ def main():
         page_loaded = False
         
         for attempt in range(max_retries):
-            print(f"[*] Попытка {attempt + 1} из {max_retries}...")
+            print(f"[*] Попытка загрузки {attempt + 1} из {max_retries}...")
             try:
-                page.goto(TARGET_URL, timeout=120000, wait_until="domcontentloaded")
+                page.goto(TARGET_URL, timeout=90000, wait_until="domcontentloaded")
             except PlaywrightTimeout:
-                print("   [~] Таймаут сети, проверяем контент...")
+                print("   [~] Таймаут, проверяем загрузился ли контент...")
             except Exception as e:
-                print(f"   [!] Ошибка сети: {e}")
+                print(f"   [!] Ошибка: {e}")
             
             try:
                 page_title = page.title()
                 if "Just a moment" in page_title or "Cloudflare" in page_title:
-                    print("   [!] Cloudflare думает... Ждем 15 секунд...")
+                    print("   [!] Решаем Cloudflare, ждем 15 сек...")
                     time.sleep(15)
                 
                 page.wait_for_selector('a[href*="/adv/"]', timeout=20000)
@@ -79,7 +79,7 @@ def main():
                 time.sleep(5)
 
         if not page_loaded:
-            print("[-] Сомон заблокировал все попытки. Завершаем работу.")
+            print("[-] Сомон заблокировал попытки. Завершаем работу.")
             browser.close()
             return
 
@@ -92,30 +92,22 @@ def main():
             if href and re.search(r'-(\d+)/?$', href):
                 ad_urls.add(BASE_URL + href if href.startswith('/') else href)
 
-        ad_urls = list(ad_urls)[:3] 
+        ad_urls = list(ad_urls)[:3] # Ограничим 3 квартирами для теста
         print(f"[*] Найдено квартир для парсинга: {len(ad_urls)}")
 
         for idx, url in enumerate(ad_urls, 1):
             print(f"\n[{idx}/{len(ad_urls)}] Заходим: {url}")
             
-            # ОТКРЫВАЕМ НОВУЮ ВКЛАДКУ ДЛЯ КАЖДОГО ОБЪЯВЛЕНИЯ
-            ad_page = context.new_page()
-            
             try:
-                ad_page.goto(url, timeout=90000, wait_until="domcontentloaded")
-            except PlaywrightTimeout:
-                pass
+                page.goto(url, timeout=90000, wait_until="domcontentloaded")
+                
+                # ЖДЕМ ФИЗИЧЕСКОГО ПОЯВЛЕНИЯ ЗАГОЛОВКА НА ЭКРАНЕ
+                page.wait_for_selector('h1', state='visible', timeout=20000)
+                
+                # Даем сайту еще 3 секунды, чтобы он дорисовал кнопки и характеристики
+                time.sleep(3) 
             except Exception as e:
-                print(f"   [!] Ошибка сети: {e}")
-
-            try:
-                if "Just a moment" in ad_page.title():
-                    time.sleep(10)
-                # Ждем цену именно на новой вкладке
-                ad_page.wait_for_selector('.announcement-price, .item-price, [data-meta-id="price"]', timeout=20000)
-            except:
-                print("   [!] Не дождались цены квартиры, пропускаем.")
-                ad_page.close() # Обязательно закрываем вкладку
+                print("   [!] Контент квартиры не прогрузился, пропускаем.")
                 continue
 
             item_data = {
@@ -124,17 +116,17 @@ def main():
                 "rooms": None, "area_sqm": None, "floor": None
             }
 
-            try: item_data["title"] = ad_page.locator('h1').first.inner_text().strip()
+            try: item_data["title"] = page.locator('h1').first.inner_text().strip()
             except: pass
 
-            try: item_data["price_tjs"] = clean_price(ad_page.locator('.announcement-price, .item-price, [data-meta-id="price"]').first.inner_text())
+            try: item_data["price_tjs"] = clean_price(page.locator('.announcement-price, .item-price, [data-meta-id="price"]').first.inner_text())
             except: pass
 
-            try: item_data["description"] = ad_page.locator('.announcement-description, .item-description').first.inner_text().strip()
+            try: item_data["description"] = page.locator('.announcement-description, .item-description').first.inner_text().strip()
             except: pass
 
             try:
-                chars_blocks = ad_page.locator('ul.chars-list li, .characteristics-item').all()
+                chars_blocks = page.locator('ul.chars-list li, .characteristics-item').all()
                 for char in chars_blocks:
                     text = char.inner_text().lower()
                     if 'комнат' in text: item_data["rooms"] = int(re.sub(r'[^\d]', '', text) or 0)
@@ -147,29 +139,27 @@ def main():
             except: pass
 
             # КЛИК ПО ТЕЛЕФОНУ
-            ad_page.mouse.wheel(0, 500)
+            page.mouse.wheel(0, 500)
             random_delay(2, 4)
 
             try:
-                phone_btn = ad_page.locator('text="Показать", text="Телефон", .js-item-phone-button, .phone-button').first
+                phone_btn = page.locator('text="Показать", text="Телефон", .js-item-phone-button, .phone-button').first
                 if phone_btn.is_visible():
                     phone_btn.click()
                     print("   [*] Кликнули 'Показать телефон'...")
-                    ad_page.wait_for_selector('a[href^="tel:"], .phone-number', timeout=15000)
+                    page.wait_for_selector('a[href^="tel:"], .phone-number', state='visible', timeout=15000)
                     random_delay(1, 2)
                     
-                    phone_link = ad_page.locator('a[href^="tel:"]').first
+                    phone_link = page.locator('a[href^="tel:"]').first
                     if phone_link.is_visible():
                         item_data["phone"] = re.sub(r'[^\d+]', '', phone_link.get_attribute('href').replace('tel:', ''))
                     else:
-                        item_data["phone"] = re.sub(r'[^\d+]', '', ad_page.locator('.phone-number, .js-phone-number').first.inner_text())
+                        item_data["phone"] = re.sub(r'[^\d+]', '', page.locator('.phone-number, .js-phone-number').first.inner_text())
             except:
-                print("   [-] Кнопку телефона не нашли")
+                print("   [-] Кнопка телефона не найдена")
 
             print(f"   [+] Собран: {item_data['rooms']}-комн | {item_data['area_sqm']}м² | Этаж: {item_data['floor']} | Тел: {item_data['phone']}")
             results.append(item_data)
-            
-            ad_page.close() # Закрываем вкладку квартиры!
 
         browser.close()
 
@@ -177,7 +167,7 @@ def main():
         print(f"\n[*] Отправляем в n8n...")
         try:
             requests.post(N8N_WEBHOOK_URL, json=results, timeout=15)
-            print("[+] УСПЕХ! Данные отправлены.")
+            print("[+] УСПЕХ! Данные в базе.")
         except Exception as e:
             print(f"[!] Ошибка отправки: {e}")
 

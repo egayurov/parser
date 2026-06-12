@@ -9,8 +9,8 @@ N8N_WEBHOOK_URL = "https://n8n-lolcfinance-n8n.ov4co6.easypanel.host/webhook/som
 
 # Твои новые прокси от Proxy.Market
 PROXY_SERVER = "http://pool.proxy.market:10000" 
-PROXY_USERNAME = "v82tUWwdyq"
-PROXY_PASSWORD = "7gZlv9Smtb"
+PROXY_USERNAME = "caVdrQpUyf"
+PROXY_PASSWORD = "20AKQfSLTR"
 
 BASE_URL = "https://somon.tj"
 TARGET_URL = "https://somon.tj/nedvizhimost/prodazha-kvartir/"

@@ -33,12 +33,11 @@ def main():
     with sync_playwright() as p:
         proxy_settings = {"server": PROXY_SERVER, "username": PROXY_USERNAME, "password": PROXY_PASSWORD}
 
-        # Добавили маскировку от бот-защиты
         browser = p.chromium.launch(
             headless=True,
             args=[
                 f"--proxy-server={PROXY_SERVER}",
-                "--disable-blink-features=AutomationControlled" 
+                "--disable-blink-features=AutomationControlled"
             ]
         )
         context = browser.new_context(
@@ -50,14 +49,39 @@ def main():
         
         page = context.new_page()
 
-        print(f"[*] Открываем раздел продажа квартир...")
+        print(f"[*] Открываем главную страницу (Ожидание обхода Cloudflare до 2-х минут)...")
         
-        try:
-            page.goto(TARGET_URL, timeout=60000)
-            page.wait_for_selector('a[href*="/adv/"]', timeout=30000)
-            print(f"[*] УСПЕХ! ЗАГОЛОВОК: {page.title()}")
-        except Exception as e:
-            print(f"[-] Не смогли пробить главную страницу: {e}")
+        max_retries = 3
+        page_loaded = False
+        
+        for attempt in range(max_retries):
+            print(f"[*] Попытка {attempt + 1} из {max_retries}...")
+            try:
+                # Даем ScraperAPI 120 секунд на решение капчи
+                page.goto(TARGET_URL, timeout=120000, wait_until="domcontentloaded")
+            except PlaywrightTimeout:
+                print("   [~] Долго грузит, проверяем, прошел ли текст...")
+            except Exception as e:
+                print(f"   [!] Ошибка сети: {e}")
+            
+            # Проверяем, пробил ли он защиту
+            try:
+                page_title = page.title()
+                if "Just a moment" in page_title or "Cloudflare" in page_title:
+                    print("   [!] Всё еще висит заглушка Cloudflare, ждем 15 сек...")
+                    time.sleep(15)
+                
+                # Ждем появления ссылок на квартиры
+                page.wait_for_selector('a[href*="/adv/"]', timeout=20000)
+                print(f"[*] УСПЕХ! ЗАГОЛОВОК: {page.title()}")
+                page_loaded = True
+                break
+            except:
+                print("   [-] Страница не пробита. Пробуем новый IP...")
+                time.sleep(5)
+
+        if not page_loaded:
+            print("[-] Сомон заблокировал все попытки. Завершаем работу.")
             browser.close()
             return
 
@@ -70,30 +94,25 @@ def main():
             if href and re.search(r'-(\d+)/?$', href):
                 ad_urls.add(BASE_URL + href if href.startswith('/') else href)
 
-        ad_urls = list(ad_urls)[:4] 
+        ad_urls = list(ad_urls)[:3] # Берем 3 квартиры для теста
         print(f"[*] Найдено квартир для парсинга: {len(ad_urls)}")
 
         for idx, url in enumerate(ad_urls, 1):
             print(f"\n[{idx}/{len(ad_urls)}] Заходим: {url}")
             
             try:
-                page.goto(url, timeout=60000)
-                
-                # Ждем 5 секунд, чтобы Cloudflare (если он есть) подумал
-                time.sleep(5)
-                
-                page_title = page.title()
-                print(f"   [?] Видим заголовок: {page_title}")
-                
-                if "Just a moment" in page_title or "Cloudflare" in page_title or "Attention" in page_title:
-                    print("   [!] Попали на Cloudflare. Ждем 15 секунд его решения...")
-                    time.sleep(15)
-                
-                # ЖДЕМ ИМЕННО ЦЕНУ КВАРТИРЫ, А НЕ ПРОСТО H1
-                page.wait_for_selector('.announcement-price, .item-price, [data-meta-id="price"]', timeout=20000)
-                
-            except Exception as e:
-                print(f"   [!] Настоящая страница квартиры так и не подгрузилась. Идем дальше.")
+                # На страницу квартиры тоже даем 120 секунд
+                page.goto(url, timeout=120000, wait_until="domcontentloaded")
+            except PlaywrightTimeout:
+                pass
+            except:
+                continue
+
+            # Ждем появления цены (значит страница загрузилась реально)
+            try:
+                page.wait_for_selector('.announcement-price, .item-price, [data-meta-id="price"]', timeout=30000)
+            except:
+                print("   [!] Не дождались цены квартиры, пропускаем.")
                 continue
 
             item_data = {
@@ -133,7 +152,7 @@ def main():
                 if phone_btn.is_visible():
                     phone_btn.click()
                     print("   [*] Кликнули 'Показать телефон'...")
-                    page.wait_for_selector('a[href^="tel:"], .phone-number', timeout=15000)
+                    page.wait_for_selector('a[href^="tel:"], .phone-number', timeout=20000)
                     random_delay(1, 2)
                     
                     phone_link = page.locator('a[href^="tel:"]').first

@@ -1,89 +1,132 @@
 import requests
 from bs4 import BeautifulSoup
-from urllib.parse import urljoin, urlparse
+import csv
 import time
+from urllib.parse import urljoin
 
 # ================= КОНФИГУРАЦИЯ =================
-# Укажите языковые префиксы, которые есть на сайте
-LANGUAGES = ["ru", "tj", "en"] 
-DOMAIN = "oxus.tj"
+BASE_URL = "https://eprocurement.gov.tj/ru/searchanno?binname=&methodz=&Uname=&numberAnno=&statuses=&years=&titleAnno=&date_start=&purch=&region_supply=&date_end=&filter_anno=Y"
+DOMAIN = "https://eprocurement.gov.tj"
+OUTPUT_FILE = "all_tenders.csv"
+DELAY_BETWEEN_PAGES = 1.2  # Задержка в секундах между страницами
+MAX_RETRIES = 3            # Количество попыток при сбое сети
 
-# URL вашего вебхука в n8n
+# Вставьте сюда ваш PRODUCTION URL из узла Webhook в n8n (без слова -test)
 N8N_WEBHOOK_URL = "https://n8n-lolcfinance-n8n.ov4co6.easypanel.host/webhook/oxus-parser"
 # =================================================
 
-def clean_text(soup):
-    for element in soup(["script", "style", "noscript", "header", "footer", "nav"]):
-        element.decompose()
-    text = soup.get_text(separator='\n')
-    lines = [line.strip() for line in text.splitlines() if line.strip()]
-    return "\n".join(lines)
-
-def crawl_language(lang):
-    base_url = f"https://{DOMAIN}/index.php/{lang}/"
-    output_file = f"oxus_{lang}_content.txt"
-    visited = set()
-    to_visit = [base_url]
-    
-    print(f"\n[*] Начинаем сбор версии для языка: {lang.upper()}")
-    
-    with open(output_file, "w", encoding="utf-8") as f:
-        while to_visit:
-            url = to_visit.pop(0)
-            if url in visited:
-                continue
-                
-            print(f"[{lang.upper()}] Сканируем: {url}")
-            try:
-                time.sleep(1)
-                response = requests.get(url, timeout=15, headers={
-                    "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36"
-                })
-                
-                if response.status_code != 200:
-                    continue
-                    
-                visited.add(url)
-                soup = BeautifulSoup(response.text, 'html.parser')
-                
-                title = soup.title.string.strip() if soup.title else "No Title"
-                content_text = clean_text(soup)
-                
-                f.write(f"\n\n{'='*60}\nURL: {url}\nЗАГОЛОВОК: {title}\n{'='*60}\n\n")
-                f.write(content_text)
-                f.write("\n")
-                
-                for link in soup.find_all('a', href=True):
-                    next_url = urljoin(url, link['href'])
-                    parsed_next = urlparse(next_url)
-                    
-                    # Ищем ссылки только для текущего языка (например, содержащие /ru/ или /tj/)
-                    if DOMAIN in parsed_next.netloc and f"/{lang}/" in parsed_next.path:
-                        if not any(ext in next_url.lower() for ext in ['.pdf', '.jpg', '.png', '.doc', '.docx', '.zip']):
-                            clean_next_url = next_url.split('#')[0]
-                            if clean_next_url not in visited and clean_next_url not in to_visit:
-                                to_visit.append(clean_next_url)
-                                
-            except Exception as e:
-                print(f"   [!] Ошибка {url}: {e}")
-                
-    print(f"[+] Сбор {lang.upper()} завершен. Файл: {output_file}")
-    return output_file
-
-def send_to_n8n(file_path):
-    print(f"[*] Отправляем {file_path} в n8n...")
-    try:
-        with open(file_path, "rb") as f:
-            response = requests.post(N8N_WEBHOOK_URL, files={"file": f}, timeout=30)
-            print(f"[+] Ответ n8n для {file_path}: {response.status_code}")
-    except Exception as e:
-        print(f"[!] Ошибка отправки {file_path} в n8n: {e}")
+def fetch_page_with_retry(url, headers, retries=MAX_RETRIES):
+    """Выполняет запрос к странице с поддержкой повторных попыток при ошибках сети."""
+    for attempt in range(retries):
+        try:
+            response = requests.get(url, headers=headers, timeout=20)
+            if response.status_code == 200:
+                return response
+            else:
+                print(f"   [!] Сервер вернул код {response.status_code}. Попытка {attempt + 1} из {retries}...")
+        except (requests.exceptions.RequestException, Exception) as e:
+            print(f"   [!] Ошибка сети: {e}. Попытка {attempt + 1} из {retries}...")
+        
+        # Увеличиваем задержку перед следующей попыткой
+        time.sleep(5 * (attempt + 1))
+    return None
 
 def main():
-    for lang in LANGUAGES:
-        file_created = crawl_language(lang)
-        send_to_n8n(file_created)
-        time.sleep(2) # Пауза перед следующим языком
+    headers = {
+        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36"
+    }
+
+    fieldnames = [
+        "number", "organizer", "purchaser", "title", "url", 
+        "method", "subject_type", "start_date", "end_date", 
+        "lots_count", "status"
+    ]
+
+    # Создаем файл и записываем заголовок
+    try:
+        with open(OUTPUT_FILE, mode="w", encoding="utf-8-sig", newline="") as f:
+            writer = csv.DictWriter(f, fieldnames=fieldnames, delimiter=";")
+            writer.writeheader()
+        print(f"[+] Файл {OUTPUT_FILE} успешно создан. Начинаем сбор...")
+    except Exception as e:
+        print(f"[!] Не удалось создать файл для записи: {e}")
+        return
+
+    page = 1
+    total_saved = 0
+
+    while True:
+        url = f"{BASE_URL}&page={page}"
+        print(f"[*] Обработка страницы {page}...")
+        
+        response = fetch_page_with_retry(url, headers)
+        if not response:
+            print(f"[!] Не удалось загрузить страницу {page} после {MAX_RETRIES} попыток. Завершение работы.")
+            break
+            
+        soup = BeautifulSoup(response.text, 'html.parser')
+        table = soup.find('table')
+        
+        if not table:
+            print(f"[+] Сбор завершен. На странице {page} таблица объявлений отсутствует.")
+            break
+            
+        rows = table.find_all('tr')
+        page_results = []
+        
+        for row in rows[1:]:
+            cols = row.find_all('td')
+            if len(cols) >= 10:
+                anno_link_element = cols[3].find('a', href=True)
+                anno_title = anno_link_element.text.strip() if anno_link_element else cols[3].text.strip()
+                anno_url = urljoin(DOMAIN, anno_link_element['href']) if anno_link_element else ""
+                
+                item = {
+                    "number": cols[0].text.strip(),
+                    "organizer": cols[1].text.strip(),
+                    "purchaser": cols[2].text.strip(),
+                    "title": anno_title,
+                    "url": anno_url,
+                    "method": cols[4].text.strip(),
+                    "subject_type": cols[5].text.strip(),
+                    "start_date": cols[6].text.strip(),
+                    "end_date": cols[7].text.strip(),
+                    "lots_count": cols[8].text.strip(),
+                    "status": cols[9].text.strip()
+                }
+                page_results.append(item)
+        
+        if not page_results:
+            print(f"[+] Сбор завершен. На странице {page} нет новых объявлений.")
+            break
+            
+        try:
+            with open(OUTPUT_FILE, mode="a", encoding="utf-8-sig", newline="") as f:
+                writer = csv.DictWriter(f, fieldnames=fieldnames, delimiter=";")
+                writer.writerows(page_results)
+            
+            total_saved += len(page_results)
+            print(f"   [+] Успешно сохранено {len(page_results)} строк со страницы {page}. Всего в базе: {total_saved}")
+        except Exception as e:
+            print(f"   [!] Ошибка при записи данных страницы {page} в файл: {e}")
+            
+        page += 1
+        time.sleep(DELAY_BETWEEN_PAGES)
+
+    print(f"\n[+] Парсинг завершен. Всего собрано объявлений: {total_saved}. Файл: {OUTPUT_FILE}")
+
+    # ОТПРАВКА ФАЙЛА В n8n ПОСЛЕ ЗАВЕРШЕНИЯ ВСЕГО СБОРА
+    print("[*] Отправляем итоговый файл в n8n...")
+    try:
+        with open(OUTPUT_FILE, "rb") as f:
+            # Увеличим тайм-аут до 60 секунд, так как файл может быть объемным
+            response = requests.post(N8N_WEBHOOK_URL, files={"file": f}, timeout=60)
+            if response.status_code == 200:
+                print("[+] УСПЕХ! Полный файл успешно отправлен в n8n.")
+            else:
+                print(f"[-] n8n вернул код ответа: {response.status_code}")
+    except Exception as e:
+        print(f"[!] Ошибка отправки итогового файла в n8n: {e}")
 
 if __name__ == "__main__":
     main()

@@ -10,7 +10,7 @@ DOMAIN = urlparse(BASE_URL).netloc
 OUTPUT_FILE = "oxus_full_content.txt"
 
 # URL вашего вебхука в n8n (сейчас указан тестовый URL для проверки)
-N8N_WEBHOOK_URL = "https://n8n-lolcfinance-n8n.ov4co6.easypanel.host/webhook-test/oxus-parser"
+N8N_WEBHOOK_URL = "https://n8n-lolcfinance-n8n.ov4co6.easypanel.host/webhook/oxus-parser"
 # =================================================
 
 def clean_text(soup):

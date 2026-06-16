@@ -9,7 +9,7 @@ LANGUAGES = ["ru", "tj", "en"]
 DOMAIN = "oxus.tj"
 
 # URL вашего вебхука в n8n
-N8N_WEBHOOK_URL = "https://n8n-lolcfinance-n8n.ov4co6.easypanel.host/webhook-test/oxus-parser"
+N8N_WEBHOOK_URL = "https://n8n-lolcfinance-n8n.ov4co6.easypanel.host/webhook/oxus-parser"
 # =================================================
 
 def clean_text(soup):

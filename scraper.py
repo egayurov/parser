@@ -1,175 +1,86 @@
-import time
-import random
-import re
 import requests
-from playwright.sync_api import sync_playwright, TimeoutError as PlaywrightTimeout
+from bs4 import BeautifulSoup
+from urllib.parse import urljoin, urlparse
+import time
+import re
 
 # ================= КОНФИГУРАЦИЯ =================
-N8N_WEBHOOK_URL = "https://n8n-lolcfinance-n8n.ov4co6.easypanel.host/webhook/somon-parser"
-
-# ScraperAPI с липкой сессией (чтобы не решать капчу для каждой квартиры)
-PROXY_SERVER = "http://proxy-server.scraperapi.com:8001" 
-PROXY_USERNAME = "scraperapi.premium=true.session_number=77777" 
-PROXY_PASSWORD = "7bcaf0b4733c9417fab59fbe5fa8e711"
-
-BASE_URL = "https://somon.tj"
-TARGET_URL = "https://somon.tj/nedvizhimost/prodazha-kvartir/"
+BASE_URL = "https://oxus.tj/index.php/ru/"
+DOMAIN = urlparse(BASE_URL).netloc
+OUTPUT_FILE = "oxus_full_content.txt"
 # =================================================
 
-def random_delay(min_sec=3.0, max_sec=6.0):
-    time.sleep(random.uniform(min_sec, max_sec))
-
-def clean_price(price_str):
-    if not price_str: return 0
-    digits = re.sub(r'[^\d]', '', price_str)
-    return int(digits) if digits else 0
-
-def extract_platform_id(url):
-    match = re.search(r'-(\d+)/?$', url)
-    return f"somon_{match.group(1)}" if match else f"somon_{random.randint(100000, 999999)}"
+def clean_text(soup):
+    """Очищает HTML от мусора (скрипты, стили, меню навигации) и возвращает чистый текст."""
+    # Удаляем служебные теги
+    for element in soup(["script", "style", "noscript", "header", "footer", "nav"]):
+        element.decompose()
+        
+    # Извлекаем текст
+    text = soup.get_text(separator='\n')
+    
+    # Очищаем от лишних пустых строк
+    lines = [line.strip() for line in text.splitlines() if line.strip()]
+    return "\n".join(lines)
 
 def main():
-    results = []
-
-    with sync_playwright() as p:
-        proxy_settings = {"server": PROXY_SERVER, "username": PROXY_USERNAME, "password": PROXY_PASSWORD}
-
-        browser = p.chromium.launch(
-            headless=True,
-            args=[
-                f"--proxy-server={PROXY_SERVER}",
-                "--disable-blink-features=AutomationControlled"
-            ]
-        )
-        context = browser.new_context(
-            proxy=proxy_settings,
-            ignore_https_errors=True,
-            viewport={'width': 1920, 'height': 1080},
-            user_agent="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36"
-        )
-        
-        page = context.new_page()
-
-        print(f"[*] Открываем главную страницу...")
-        
-        max_retries = 3
-        page_loaded = False
-        
-        for attempt in range(max_retries):
-            print(f"[*] Попытка загрузки {attempt + 1} из {max_retries}...")
-            try:
-                page.goto(TARGET_URL, timeout=90000, wait_until="domcontentloaded")
-            except PlaywrightTimeout:
-                print("   [~] Таймаут, проверяем загрузился ли контент...")
-            except Exception as e:
-                print(f"   [!] Ошибка: {e}")
-            
-            try:
-                page_title = page.title()
-                if "Just a moment" in page_title or "Cloudflare" in page_title:
-                    print("   [!] Решаем Cloudflare, ждем 15 сек...")
-                    time.sleep(15)
-                
-                page.wait_for_selector('a[href*="/adv/"]', timeout=20000)
-                print(f"[*] УСПЕХ! ЗАГОЛОВОК: {page.title()}")
-                page_loaded = True
-                break
-            except:
-                print("   [-] Страница не пробита. Пробуем еще...")
-                time.sleep(5)
-
-        if not page_loaded:
-            print("[-] Сомон заблокировал попытки. Завершаем работу.")
-            browser.close()
-            return
-
-        print("[*] Собираем ссылки...")
-        links_locators = page.locator('a[href*="/adv/"]').all()
-        
-        ad_urls = set()
-        for link in links_locators:
-            href = link.get_attribute('href')
-            if href and re.search(r'-(\d+)/?$', href):
-                ad_urls.add(BASE_URL + href if href.startswith('/') else href)
-
-        ad_urls = list(ad_urls)[:3] # Ограничим 3 квартирами для теста
-        print(f"[*] Найдено квартир для парсинга: {len(ad_urls)}")
-
-        for idx, url in enumerate(ad_urls, 1):
-            print(f"\n[{idx}/{len(ad_urls)}] Заходим: {url}")
-            
-            try:
-                page.goto(url, timeout=90000, wait_until="domcontentloaded")
-                
-                # ЖДЕМ ФИЗИЧЕСКОГО ПОЯВЛЕНИЯ ЗАГОЛОВКА НА ЭКРАНЕ
-                page.wait_for_selector('h1', state='visible', timeout=20000)
-                
-                # Даем сайту еще 3 секунды, чтобы он дорисовал кнопки и характеристики
-                time.sleep(3) 
-            except Exception as e:
-                print("   [!] Контент квартиры не прогрузился, пропускаем.")
+    visited = set()
+    to_visit = [BASE_URL]
+    
+    print(f"[*] Начало парсинга сайта {BASE_URL}...")
+    
+    with open(OUTPUT_FILE, "w", encoding="utf-8") as f:
+        while to_visit:
+            url = to_visit.pop(0)
+            if url in visited:
                 continue
-
-            item_data = {
-                "platform_id": extract_platform_id(url), "url": url, "title": "",
-                "price_tjs": 0, "description": "", "phone": "", "main_image": "",
-                "rooms": None, "area_sqm": None, "floor": None
-            }
-
-            try: item_data["title"] = page.locator('h1').first.inner_text().strip()
-            except: pass
-
-            try: item_data["price_tjs"] = clean_price(page.locator('.announcement-price, .item-price, [data-meta-id="price"]').first.inner_text())
-            except: pass
-
-            try: item_data["description"] = page.locator('.announcement-description, .item-description').first.inner_text().strip()
-            except: pass
-
+                
+            print(f"[*] Сканируем: {url}")
             try:
-                chars_blocks = page.locator('ul.chars-list li, .characteristics-item').all()
-                for char in chars_blocks:
-                    text = char.inner_text().lower()
-                    if 'комнат' in text: item_data["rooms"] = int(re.sub(r'[^\d]', '', text) or 0)
-                    elif 'кв.м' in text or 'м²' in text: 
-                        val = re.findall(r'\d+\.?\d*', text)
-                        if val: item_data["area_sqm"] = float(val[0])
-                    elif 'этаж' in text:
-                        val = re.findall(r'\d+', text)
-                        if val: item_data["floor"] = int(val[0])
-            except: pass
-
-            # КЛИК ПО ТЕЛЕФОНУ
-            page.mouse.wheel(0, 500)
-            random_delay(2, 4)
-
-            try:
-                phone_btn = page.locator('text="Показать", text="Телефон", .js-item-phone-button, .phone-button').first
-                if phone_btn.is_visible():
-                    phone_btn.click()
-                    print("   [*] Кликнули 'Показать телефон'...")
-                    page.wait_for_selector('a[href^="tel:"], .phone-number', state='visible', timeout=15000)
-                    random_delay(1, 2)
+                # Небольшая задержка между запросами
+                time.sleep(1)
+                
+                response = requests.get(url, timeout=15, headers={
+                    "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36"
+                })
+                
+                if response.status_code != 200:
+                    print(f"   [-] Ошибка {response.status_code} для {url}")
+                    continue
                     
-                    phone_link = page.locator('a[href^="tel:"]').first
-                    if phone_link.is_visible():
-                        item_data["phone"] = re.sub(r'[^\d+]', '', phone_link.get_attribute('href').replace('tel:', ''))
-                    else:
-                        item_data["phone"] = re.sub(r'[^\d+]', '', page.locator('.phone-number, .js-phone-number').first.inner_text())
-            except:
-                print("   [-] Кнопка телефона не найдена")
-
-            print(f"   [+] Собран: {item_data['rooms']}-комн | {item_data['area_sqm']}м² | Этаж: {item_data['floor']} | Тел: {item_data['phone']}")
-            results.append(item_data)
-
-        browser.close()
-
-    if results:
-        print(f"\n[*] Отправляем в n8n...")
-        try:
-            requests.post(N8N_WEBHOOK_URL, json=results, timeout=15)
-            print("[+] УСПЕХ! Данные в базе.")
-        except Exception as e:
-            print(f"[!] Ошибка отправки: {e}")
+                visited.add(url)
+                soup = BeautifulSoup(response.text, 'html.parser')
+                
+                # Извлекаем заголовок и контент
+                title = soup.title.string.strip() if soup.title else "Без заголовка"
+                content_text = clean_text(soup)
+                
+                # Записываем в файл в читаемом виде
+                f.write(f"\n\n{'='*60}\n")
+                f.write(f"URL: {url}\n")
+                f.write(f"ЗАГОЛОВОК: {title}\n")
+                f.write(f"{'='*60}\n\n")
+                f.write(content_text)
+                f.write("\n")
+                
+                # Поиск новых внутренних ссылок только для русской версии
+                for link in soup.find_all('a', href=True):
+                    next_url = urljoin(url, link['href'])
+                    parsed_next = urlparse(next_url)
+                    
+                    # Проверяем, что ссылка ведет на тот же домен и содержит '/ru/'
+                    if DOMAIN in parsed_next.netloc and "/ru/" in parsed_next.path:
+                        # Исключаем файлы, которые не нужно парсить
+                        if not any(ext in next_url.lower() for ext in ['.pdf', '.jpg', '.png', '.doc', '.docx', '.zip', '.xls', '.xlsx']):
+                            # Убираем якоря типа #content
+                            clean_next_url = next_url.split('#')[0]
+                            if clean_next_url not in visited and clean_next_url not in to_visit:
+                                to_visit.append(clean_next_url)
+                                
+            except Exception as e:
+                print(f"   [!] Ошибка при обработке {url}: {e}")
+                
+    print(f"\n[+] Сбор завершен. Все данные сохранены в файл: {OUTPUT_FILE}")
 
 if __name__ == "__main__":
     main()

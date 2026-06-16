@@ -8,6 +8,9 @@ import re
 BASE_URL = "https://oxus.tj/index.php/ru/"
 DOMAIN = urlparse(BASE_URL).netloc
 OUTPUT_FILE = "oxus_full_content.txt"
+
+# URL вашего вебхука в n8n (сейчас указан тестовый URL для проверки)
+N8N_WEBHOOK_URL = "https://n8n-lolcfinance-n8n.ov4co6.easypanel.host/webhook-test/oxus-parser"
 # =================================================
 
 def clean_text(soup):
@@ -81,6 +84,18 @@ def main():
                 print(f"   [!] Ошибка при обработке {url}: {e}")
                 
     print(f"\n[+] Сбор завершен. Все данные сохранены в файл: {OUTPUT_FILE}")
+
+    # Блок отправки готового файла в n8n
+    print("[*] Отправляем собранный файл в n8n...")
+    try:
+        with open(OUTPUT_FILE, "rb") as f:
+            response = requests.post(N8N_WEBHOOK_URL, files={"file": f}, timeout=30)
+            if response.status_code == 200:
+                print("[+] УСПЕХ! Файл успешно передан в n8n.")
+            else:
+                print(f"[-] n8n вернул код ответа: {response.status_code}")
+    except Exception as e:
+        print(f"[!] Не удалось отправить файл в n8n: {e}")
 
 if __name__ == "__main__":
     main()
